@@ -16,37 +16,51 @@ type Meditation struct {
 }
 
 type CreateMeditationInput struct {
-	URL    string `json:"audioUrl" binding:"required"`
-	UserId string `json:"_user_id"`
-	Name   string `json:"name" binding:"required"`
+	URL  string `json:"audioUrl" binding:"required"`
+	Name string `json:"name" binding:"required"`
 }
 
-var meditations []Meditation
+var meditationsMap map[string][]Meditation
 
 func SaveMeditation(meditation Meditation) {
-	slice := append(meditations, meditation)
-	meditations = slice
-}
+	userSlice, ok := meditationsMap[meditation.UserId]
 
-func ListMeditations() []Meditation {
-	return meditations
-}
-
-func GetMeditation(id string) (Meditation, error) {
-	for _, m := range meditations {
-		if m.ID == id {
-			return m, nil
-		}
+	if !ok {
+		userSlice = []Meditation{meditation}
+	} else {
+		userSlice = append(userSlice, meditation)
 	}
+	meditationsMap[meditation.UserId] = userSlice
+}
+
+func ListMeditations(userId string) []Meditation {
+	return meditationsMap[userId]
+}
+
+func GetMeditation(userId string, id string) (Meditation, error) {
 	emptyMeditation := Meditation{
 		Name: "",
 		URL:  "",
 		ID:   "",
 	}
+	meditations, ok := meditationsMap[userId]
+	if !ok {
+		return emptyMeditation, errors.New("No user with id " + userId + " was found")
+	}
+	for _, m := range meditations {
+		if m.ID == id {
+			return m, nil
+		}
+	}
+
 	return emptyMeditation, errors.New("No meditation with id " + id + " was found")
 }
 
-func DeleteMeditation(id string) error {
+func DeleteMeditation(userId string, id string) error {
+	meditations, ok := meditationsMap[userId]
+	if !ok {
+		return errors.New("No user with id " + userId + " was found")
+	}
 	idxToDelete := -1
 	for i, m := range meditations {
 		if m.ID == id {
@@ -58,6 +72,9 @@ func DeleteMeditation(id string) error {
 		finalIdx := len(meditations) - 1
 		meditations[idxToDelete], meditations[finalIdx] = meditations[finalIdx], meditations[idxToDelete]
 		meditations = meditations[:finalIdx]
+
+		meditationsMap[userId] = meditations
+
 		return nil
 	}
 
@@ -67,15 +84,34 @@ func DeleteMeditation(id string) error {
 func main() {
 	r := gin.Default()
 
-	meditations = []Meditation{}
+	meditationsMap = map[string][]Meditation{}
 
 	r.GET("/meditations", func(c *gin.Context) {
+		userId := c.GetHeader("User-Id")
+
+		if userId == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No User-Id header present"})
+			return
+		}
+
+		meditations := ListMeditations(userId)
+		if meditations == nil {
+			c.JSON(http.StatusOK, [0]Meditation{})
+			return
+		}
 		c.JSON(http.StatusOK, meditations)
 	})
 
 	r.GET("/meditations/:id", func(c *gin.Context) {
 		id := c.Param("id")
-		m, err := GetMeditation(id)
+		userId := c.GetHeader("User-Id")
+
+		if userId == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No User-Id header present"})
+			return
+		}
+
+		m, err := GetMeditation(userId, id)
 
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
@@ -87,8 +123,9 @@ func main() {
 
 	r.DELETE("/meditations/:id", func(c *gin.Context) {
 		id := c.Param("id")
+		userId := c.Request.Header["User-Id"][0]
 
-		if err := DeleteMeditation(id); err != nil {
+		if err := DeleteMeditation(userId, id); err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
@@ -99,6 +136,8 @@ func main() {
 	r.POST("/meditations", func(c *gin.Context) {
 		var input CreateMeditationInput
 
+		userId := c.Request.Header["User-Id"][0]
+
 		if err := c.ShouldBindJSON(&input); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		}
@@ -106,9 +145,10 @@ func main() {
 		u4 := uuid.NewV4()
 
 		newMeditation := Meditation{
-			ID:   u4.String(),
-			URL:  input.URL,
-			Name: input.Name,
+			ID:     u4.String(),
+			URL:    input.URL,
+			Name:   input.Name,
+			UserId: userId,
 		}
 
 		SaveMeditation(newMeditation)
