@@ -15,7 +15,7 @@ func (e *Env) ListMeditationsForUserHandler(c *gin.Context) {
 		return
 	}
 
-	meditations := e.store.ListMeditations(userId)
+	meditations, _ := e.store.ListMeditations(userId)
 	if meditations == nil {
 		c.JSON(http.StatusOK, [0]Meditation{})
 		return
@@ -75,4 +75,35 @@ func (e *Env) CreateMeditationForUserHandler(c *gin.Context) {
 	e.store.SaveMeditation(newMeditation)
 
 	c.JSON(http.StatusCreated, newMeditation)
+}
+
+func (e *Env) UpdateMeditationForUserHandler(c *gin.Context) {
+	id := c.Param("id")
+	userId := c.GetHeader("User-Id")
+
+	if userId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No User-Id header present"})
+		return
+	}
+
+	var input CreateMeditationInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	updatedMeditation := Meditation{
+		ID:     id,
+		URL:    input.URL,
+		Name:   input.Name,
+		UserId: userId,
+	}
+
+	err := e.store.UpdateMeditation(updatedMeditation)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{})
 }
