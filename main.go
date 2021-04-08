@@ -39,7 +39,7 @@ func main() {
 	r := gin.Default()
 
 	env := Env{}
-	env.store = NewDynamoMeditationStore("tempora-local", true)
+	env.store = NewDynamoMeditationStore("tempora-local", true, false)
 
 	r.GET("/meditations", env.ListMeditationsForUserHandler)
 

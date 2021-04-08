@@ -34,7 +34,7 @@ type DynamoMeditationStore struct {
 	tableName string
 }
 
-func NewDynamoMeditationStore(tableName string, local bool) DynamoMeditationStore {
+func NewDynamoMeditationStore(tableName string, local bool, createTable bool) DynamoMeditationStore {
 	dynamoStore := DynamoMeditationStore{
 		tableName: tableName,
 	}
@@ -52,6 +52,28 @@ func NewDynamoMeditationStore(tableName string, local bool) DynamoMeditationStor
 		}))
 	}
 	dynamoStore.svc = dynamodb.New(dynamoStore.sess)
+
+	if createTable {
+		createTableParams := &dynamodb.CreateTableInput{
+			TableName: aws.String(tableName),
+			KeySchema: []*dynamodb.KeySchemaElement{
+				{AttributeName: aws.String("pk"), KeyType: aws.String("HASH")},
+				{AttributeName: aws.String("sk"), KeyType: aws.String("RANGE")},
+			},
+			AttributeDefinitions: []*dynamodb.AttributeDefinition{
+				{AttributeName: aws.String("pk"), AttributeType: aws.String("S")},
+				{AttributeName: aws.String("sk"), AttributeType: aws.String("S")},
+			},
+			BillingMode: aws.String(dynamodb.BillingModePayPerRequest),
+		}
+
+		_, err := dynamoStore.svc.CreateTable(createTableParams)
+
+		if err != nil {
+			fmt.Println("Error in table creation")
+			fmt.Println(err.Error())
+		}
+	}
 
 	return dynamoStore
 }
@@ -79,12 +101,11 @@ func (store DynamoMeditationStore) SaveMeditation(meditation Meditation) error {
 		Item:      meditationAVMap,
 	}
 
-	resp, err := store.svc.PutItem(params)
+	_, err = store.svc.PutItem(params)
 	if err != nil {
 		fmt.Println(err)
 		return err
 	}
-	fmt.Println(resp)
 	return nil
 }
 
@@ -163,16 +184,53 @@ func (store DynamoMeditationStore) DeleteMeditation(userId string, id string) er
 }
 
 func (store DynamoMeditationStore) UpdateMeditation(m Meditation) error {
-	meditation, err := store.GetMeditation(m.UserId, m.ID)
+	oldMeditation, err := store.GetMeditation(m.UserId, m.ID)
 	if err != nil {
 		return err
 	}
 
-	if (Meditation{}) == meditation {
+	if (Meditation{}) == oldMeditation {
 		return errors.New("No meditation with " + m.ID + " found.")
 	}
 
-	err = store.SaveMeditation(m)
+	if m.Name == oldMeditation.Name {
+		err = store.SaveMeditation(m)
+	} else {
+		mAV := mapMeditationToMeditationRecord(m)
+
+		newItem, err := dynamodbattribute.MarshalMap(mAV)
+
+		if err != nil {
+			fmt.Println(err.Error())
+		}
+
+		params := &dynamodb.TransactWriteItemsInput{
+			TransactItems: []*dynamodb.TransactWriteItem{
+				{
+					Put: &dynamodb.Put{
+						TableName: &store.tableName,
+						Item:      newItem,
+					},
+				},
+				{
+					Delete: &dynamodb.Delete{
+						TableName: &store.tableName,
+						Key: map[string]*dynamodb.AttributeValue{
+							"pk": {
+								S: aws.String(oldMeditation.UserId),
+							},
+							"sk": {
+								S: aws.String(oldMeditation.Name + "/" + oldMeditation.ID),
+							},
+						},
+					},
+				},
+			},
+		}
+		store.svc.TransactWriteItems(params)
+
+	}
+
 	if err != nil {
 		return err
 	}
